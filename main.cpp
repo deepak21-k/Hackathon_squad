@@ -53,7 +53,11 @@ int main(int argc, char* argv[]) {
   vector<int> best_selected_coders;
 
   // Non-deterministic random seed based on clock instead of fixed 42
-  mt19937 rng(chrono::high_resolution_clock::now().time_since_epoch().count()); 
+  int seed = chrono::high_resolution_clock::now().time_since_epoch().count();
+  if (argc > 2) {
+    seed = stoi(argv[2]);
+  }
+  mt19937 rng(seed); 
 
   vector<int> order(n);
   for (int i = 0; i < n; ++i) {
@@ -67,6 +71,7 @@ int main(int argc, char* argv[]) {
   vector<bool> included(n + 1);
   vector<bool> excluded(n + 1);
   vector<int> conflicts(n + 1);
+  vector<bool> in_to_add(n + 1, false);
 
   uniform_real_distribution<double> noise(0.8, 1.2);
 
@@ -90,7 +95,7 @@ int main(int argc, char* argv[]) {
             weight[i] = (s[i] * noise(rng)) / pow(deg + 1.0, alpha);
         }
       }
-      sort(order.begin(), order.end(),
+      stable_sort(order.begin(), order.end(),
            [&](int a, int b) { return weight[a] > weight[b]; });
     }
 
@@ -142,22 +147,21 @@ int main(int argc, char* argv[]) {
           }
           if (!candidates.empty()) {
             // Greedily pick independent set from candidates
-            sort(candidates.begin(), candidates.end(), [&](int a, int b) { return s[a] > s[b]; });
+            stable_sort(candidates.begin(), candidates.end(), [&](int a, int b) { return s[a] > s[b]; });
             long long gain = 0;
             vector<int> to_add;
             for (int v : candidates) {
               bool ok = true;
               for (int w : adj[v]) {
-                for (int added : to_add) {
-                  if (w == added) { ok = false; break; }
-                }
-                if (!ok) break;
+                if (in_to_add[w]) { ok = false; break; }
               }
               if (ok) {
                 gain += s[v];
                 to_add.push_back(v);
+                in_to_add[v] = true;
               }
             }
+            for (int v : to_add) in_to_add[v] = false;
             // If the combined value is greater than the removed node
             if (gain > s[i]) {
               included[i] = false;
