@@ -4,20 +4,23 @@
 #include <iostream>
 #include <random>
 #include <vector>
+#include <string>
 
 using namespace std;
 using namespace std::chrono;
 
-// Fast I/O to handle large input
 void fast_io() {
   ios_base::sync_with_stdio(false);
   cin.tie(NULL);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
   fast_io();
-  // Record the start time immediately to manage the 5-minute limit
-  auto start_time = high_resolution_clock::now();
+  
+  double TIME_LIMIT = 0.5; // Quick for testing
+  if (argc > 1) {
+    TIME_LIMIT = stod(argv[1]);
+  }
 
   int n;
   long long m;
@@ -27,8 +30,12 @@ int main() {
   }
 
   vector<long long> s(n + 1);
+  bool uniform_weights = true;
   for (int i = 1; i <= n; ++i) {
     cin >> s[i];
+    if (i > 1 && s[i] != s[1]) {
+      uniform_weights = false;
+    }
   }
 
   vector<vector<int>> adj(n + 1);
@@ -39,34 +46,27 @@ int main() {
     adj[v].push_back(u);
   }
 
-  // Time limit: 5 minutes. We'll use 4.9 minutes (294 seconds) to safely exit.
-  const double TIME_LIMIT = 0.5;
+  // Moved start time after input parsing!
+  auto start_time = high_resolution_clock::now();
 
   long long best_total_score = -1;
   vector<int> best_selected_coders;
 
-  mt19937 rng(42); // Seed for reproducible randomness
+  mt19937 rng(chrono::high_resolution_clock::now().time_since_epoch().count()); 
 
   vector<int> order(n);
   for (int i = 0; i < n; ++i) {
     order[i] = i + 1;
   }
 
-  // We'll try different heuristic criteria based on S[i] / (degree + 1)^alpha
-  // Varying alpha balances between picking high-skill individuals vs
-  // low-conflict individuals
   vector<double> alphas = {1.0, 0.5, 2.0, 0.0, 1.5, 0.8, 1.2, 0.2};
   int iteration = 0;
 
-  // Pre-allocate memory to avoid slow allocations inside the loop
   vector<double> weight(n + 1);
   vector<bool> included(n + 1);
   vector<bool> excluded(n + 1);
   vector<int> conflicts(n + 1);
-  vector<int> current_selected;
-  current_selected.reserve(n);
 
-  // Distribution to add slight noise to greedy logic
   uniform_real_distribution<double> noise(0.8, 1.2);
 
   while (true) {
@@ -76,21 +76,23 @@ int main() {
       break;
     }
 
-    // Periodically use a fully random shuffle instead of a greedy heuristic
     if (iteration % 10 == 9) {
       shuffle(order.begin(), order.end(), rng);
     } else {
       double alpha = alphas[iteration % alphas.size()];
       for (int i = 1; i <= n; ++i) {
         double deg = adj[i].size();
-        weight[i] = (s[i] * noise(rng)) / pow(deg + 1.0, alpha);
+        if (uniform_weights) {
+            weight[i] = 1.0 / pow(deg + 1.0, alpha);
+        } else {
+            weight[i] = (s[i] * noise(rng)) / pow(deg + 1.0, alpha);
+        }
       }
       sort(order.begin(), order.end(),
            [&](int a, int b) { return weight[a] > weight[b]; });
     }
 
     long long current_score = 0;
-    current_selected.clear();
     fill(included.begin(), included.end(), false);
     fill(excluded.begin(), excluded.end(), false);
 
@@ -98,7 +100,6 @@ int main() {
     for (int i : order) {
       if (!excluded[i]) {
         included[i] = true;
-        current_selected.push_back(i);
         current_score += s[i];
         for (int neighbor : adj[i]) {
           excluded[neighbor] = true;
@@ -106,14 +107,13 @@ int main() {
       }
     }
 
-    // Local Search (1-opt / insertion phase)
-    // Check if removing an existing node allows us to insert a higher-value
-    // node or if any nodes can be inserted without removing any (if gaps
-    // remain)
+    // Local Search (1-opt and 2-opt)
     fill(conflicts.begin(), conflicts.end(), 0);
-    for (int u : current_selected) {
-      for (int v : adj[u]) {
-        conflicts[v]++;
+    for (int i = 1; i <= n; ++i) {
+      if (included[i]) {
+        for (int v : adj[i]) {
+          conflicts[v]++;
+        }
       }
     }
 
@@ -123,34 +123,47 @@ int main() {
       for (int i = 1; i <= n; ++i) {
         if (!included[i]) {
           if (conflicts[i] == 0) {
-            // Found a "free" node we missed, add it
             included[i] = true;
             current_score += s[i];
             for (int neighbor : adj[i])
               conflicts[neighbor]++;
             improved = true;
-          } else if (conflicts[i] == 1) {
-            // Node conflicts with exactly ONE chosen node.
-            // We can swap them if this node gives a higher score.
-            int conflict_node = -1;
-            for (int neighbor : adj[i]) {
-              if (included[neighbor]) {
-                conflict_node = neighbor;
-                break;
+          }
+        } else {
+          // Node i is included. Try to swap it for multiple neighbors.
+          vector<int> candidates;
+          for (int v : adj[i]) {
+            if (!included[v] && conflicts[v] == 1) {
+              candidates.push_back(v);
+            }
+          }
+          if (!candidates.empty()) {
+            sort(candidates.begin(), candidates.end(), [&](int a, int b) { return s[a] > s[b]; });
+            long long gain = 0;
+            vector<int> to_add;
+            for (int v : candidates) {
+              bool ok = true;
+              for (int w : adj[v]) {
+                for (int added : to_add) {
+                  if (w == added) { ok = false; break; }
+                }
+                if (!ok) break;
+              }
+              if (ok) {
+                gain += s[v];
+                to_add.push_back(v);
               }
             }
-
-            if (conflict_node != -1 && s[i] > s[conflict_node]) {
-              // Swap them
-              included[conflict_node] = false;
-              included[i] = true;
-              current_score += s[i] - s[conflict_node];
-
-              for (int neighbor : adj[conflict_node])
-                conflicts[neighbor]--;
-              for (int neighbor : adj[i])
-                conflicts[neighbor]++;
-
+            if (gain > s[i]) {
+              included[i] = false;
+              current_score -= s[i];
+              for (int neighbor : adj[i]) conflicts[neighbor]--;
+              
+              for (int v : to_add) {
+                included[v] = true;
+                current_score += s[v];
+                for (int neighbor : adj[v]) conflicts[neighbor]++;
+              }
               improved = true;
             }
           }
@@ -158,7 +171,6 @@ int main() {
       }
     }
 
-    // Save best state found so far
     if (current_score > best_total_score) {
       best_total_score = current_score;
       best_selected_coders.clear();
@@ -172,9 +184,7 @@ int main() {
     iteration++;
   }
 
-  // OUTPUT
   cout << best_total_score << "\n";
-  sort(best_selected_coders.begin(), best_selected_coders.end());
   for (size_t i = 0; i < best_selected_coders.size(); ++i) {
     cout << best_selected_coders[i]
          << (i + 1 == best_selected_coders.size() ? "" : " ");
